@@ -619,18 +619,18 @@
         heroVideo.pause();
         heroVideo.currentTime = 0.001;
 
-        const maxTime = heroVideo.duration - 0.15;
+        const maxTime = heroVideo.duration - 0.1;
 
         // 3. Track target time from ScrollTrigger, interpolate with rAF
         let targetTime = 0;
         let currentTime = 0;
-        const lerpFactor = 0.12; // Lower = smoother but more inertia; 0.12 is a sweet spot
+        const lerpFactor = 0.15; // Slightly faster for responsiveness
 
-        // ScrollTrigger only updates the target — never touches video directly
+        // ScrollTrigger distance increased for better "temporal resolution"
         ScrollTrigger.create({
           trigger: heroSection,
           start: "top top",
-          end: "+=2200",
+          end: "+=3500", 
           pin: true,
           scrub: true,
           onUpdate: (self) => {
@@ -638,13 +638,16 @@
           }
         });
 
-        // 4. rAF loop: smoothly lerp currentTime toward target
+        // 4. Optimized rAF loop: smoothly lerp currentTime toward target with seeking guard
+        let isProcessing = false;
+
         function videoLerpLoop() {
           // Linear interpolation
           currentTime += (targetTime - currentTime) * lerpFactor;
 
-          // Only seek if delta is meaningful (avoids micro-stutters)
-          if (Math.abs(currentTime - heroVideo.currentTime) > 0.015) {
+          // CRITICAL: Only seek if the video is NOT already seeking and readyState is good
+          // This avoids queueing seek requests which causes the stuttering you saw at the end
+          if (!heroVideo.seeking && Math.abs(currentTime - heroVideo.currentTime) > 0.01) {
             heroVideo.currentTime = currentTime;
           }
 
@@ -677,35 +680,62 @@
     const nodes = document.querySelectorAll('.node-content');
     const cards = document.querySelectorAll('.day-card');
     
-    // Init state
-    wheel.style.setProperty('--wheel-rot', '0deg');
-    if(nodes[0]) nodes[0].classList.add('active');
-
-    // Number of nodes determines angle jump
     const numNodes = nodes.length;
     const angleStep = 360 / numNodes;
+    let activeIdx = -1;
 
-    cards.forEach((card, idx) => {
-      ScrollTrigger.create({
-        trigger: card,
-        start: 'top 50%',
-        end: 'bottom 50%',
-        onToggle: self => {
-          if (self.isActive) {
-            const angle = idx * angleStep;
-            wheel.style.setProperty('--wheel-rot', `-${angle}deg`);
-            
-            cards.forEach(c => c.classList.remove('active-day'));
-            card.classList.add('active-day');
-            
-            nodes.forEach((n, i) => {
-              if(i === idx) n.classList.add('active');
-              else n.classList.remove('active');
-            });
-          }
+    // Centralized activation function — single source of truth
+    function activateCard(idx) {
+      if (idx === activeIdx || idx < 0 || idx >= numNodes) return;
+      activeIdx = idx;
+
+      // Rotate flywheel: node at idx*angleStep rotates to align with the indicator (3 o'clock)
+      const rotation = -(idx * angleStep);
+      wheel.style.setProperty('--wheel-rot', `${rotation}deg`);
+      
+      // Highlight active card
+      cards.forEach((c, i) => {
+        if (i === idx) {
+          c.classList.add('active-day');
+          c.style.opacity = "1";
+          c.style.transform = "translateY(0)";
+        } else {
+          c.classList.remove('active-day');
+          c.style.opacity = "0.2";
+          c.style.transform = "translateY(20px)";
         }
       });
-    });
+      
+      // Highlight active node
+      nodes.forEach((n, i) => {
+        if (i === idx) {
+          n.classList.add('active');
+        } else {
+          n.classList.remove('active');
+        }
+      });
+    }
+
+    // Init state
+    setTimeout(() => activateCard(0), 100);
+
+    // Use IntersectionObserver for precise card detection
+    const observerOptions = {
+      root: null,
+      threshold: 0.5,
+      rootMargin: '-20% 0px -20% 0px' // Tighter margin to trigger closer to center
+    };
+
+    const flywheelObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const idx = parseInt(entry.target.dataset.day, 10);
+          activateCard(idx);
+        }
+      });
+    }, observerOptions);
+
+    cards.forEach((card) => flywheelObserver.observe(card));
 
     // Smooth anchor scrolling
     document.querySelectorAll('a[href^="#"]').forEach(anchor => {
