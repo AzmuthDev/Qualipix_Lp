@@ -594,37 +594,65 @@
     gsap.ticker.lagSmoothing(0);
     gsap.registerPlugin(ScrollTrigger);
 
-    // Hero Video Scrubbing Logic
+    // Hero Video Scrubbing Logic — rAF Lerp approach for maximum fluidity
     const heroSection = document.getElementById("hero-scrub-section");
     const heroVideo = document.getElementById("hero-video");
 
     async function preloadVideoAndScrub() {
       try {
+        // 1. Fetch entire video into memory as blob for instant seeking
         const response = await fetch("mp_.mp4");
         const blob = await response.blob();
         const blobURL = URL.createObjectURL(blob);
         heroVideo.src = blobURL;
 
-        heroVideo.onloadedmetadata = () => {
-          heroVideo.currentTime = 0.01; 
-          
-          let tl = gsap.timeline({
-            scrollTrigger: {
-              trigger: heroSection,
-              start: "top top",
-              end: "+=2500", // Distância ideal recomendada (confortável para o usuário rolar)
-              pin: true,
-              scrub: 1, // Inércia equilibrada de 1 segundo (super responsiva e sem "arrastar")
-            }
-          });
+        await new Promise((resolve) => {
+          heroVideo.onloadedmetadata = resolve;
+        });
 
-          // O Segredo para não travar no final: Nunca ir até 100% do vídeo.
-          // Parar 0.2s antes garante que ele não force o decodificador no último frame.
-          tl.to(heroVideo, {
-            currentTime: heroVideo.duration - 0.2,
-            ease: "none" // REMOVIDO o "power1.inOut". O ease "none" mantém a proporção perfeita entre o scroll e o frame do início ao fim!
-          });
-        };
+        // 2. Force full decode/buffer by briefly playing then pausing
+        heroVideo.muted = true;
+        heroVideo.currentTime = 0.001;
+        try {
+          await heroVideo.play();
+        } catch (_) {}
+        heroVideo.pause();
+        heroVideo.currentTime = 0.001;
+
+        const maxTime = heroVideo.duration - 0.15;
+
+        // 3. Track target time from ScrollTrigger, interpolate with rAF
+        let targetTime = 0;
+        let currentTime = 0;
+        const lerpFactor = 0.12; // Lower = smoother but more inertia; 0.12 is a sweet spot
+
+        // ScrollTrigger only updates the target — never touches video directly
+        ScrollTrigger.create({
+          trigger: heroSection,
+          start: "top top",
+          end: "+=2200",
+          pin: true,
+          scrub: true,
+          onUpdate: (self) => {
+            targetTime = self.progress * maxTime;
+          }
+        });
+
+        // 4. rAF loop: smoothly lerp currentTime toward target
+        function videoLerpLoop() {
+          // Linear interpolation
+          currentTime += (targetTime - currentTime) * lerpFactor;
+
+          // Only seek if delta is meaningful (avoids micro-stutters)
+          if (Math.abs(currentTime - heroVideo.currentTime) > 0.015) {
+            heroVideo.currentTime = currentTime;
+          }
+
+          requestAnimationFrame(videoLerpLoop);
+        }
+
+        requestAnimationFrame(videoLerpLoop);
+
       } catch (error) {
         console.warn("Blob fetch falhou, usando fallback normal.");
       }
